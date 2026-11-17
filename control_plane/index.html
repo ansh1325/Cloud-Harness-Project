@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cloud-Native AI Coding Harness | Control Plane</title>
-  <link rel="stylesheet" href="styles.css?v=3">
+  <link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
   <header>
@@ -17,6 +17,10 @@
     </div>
 
     <div class="metrics-bar">
+      <div class="metric-pill">
+        <span>Engine:</span>
+        <strong id="metricEngine">Groq 120B</strong>
+      </div>
       <div class="metric-pill">
         <span>Agents:</span>
         <strong id="metricActiveAgents">0</strong>/120
@@ -36,8 +40,9 @@
     </div>
 
     <div class="action-buttons">
-      <button class="btn btn-benchmark" id="btnBenchmark">▶ Run Benchmark Fix</button>
-      <button class="btn btn-primary" id="btnNewTask">+ Dispatch Agent</button>
+      <button class="btn btn-benchmark" id="btnBenchmark">▶ Benchmark</button>
+      <button class="btn btn-swarm" id="btnSwarm" title="Launch 3 isolated agents in parallel">⚡ 3x Swarm</button>
+      <button class="btn btn-primary" id="btnNewTask">+ Dispatch</button>
     </div>
   </header>
 
@@ -62,9 +67,17 @@
         <span>Live Agent Reasoning & Tool Execution</span>
         <span id="activeTaskIdDisplay" style="font-size: 12px; color: var(--text-muted);">No task selected</span>
       </div>
+      <div class="pipeline-stepper" id="pipelineStepper">
+        <div class="step-node" id="stepAst">1. AST Scan</div>
+        <div class="step-node" id="stepBaseline">2. Reproduce</div>
+        <div class="step-node" id="stepPatch">3. Patch &amp; Test</div>
+        <div class="step-node" id="stepPR">4. PR Ready</div>
+      </div>
       <div class="panel-body" id="traceContainer">
-        <div style="color: var(--text-muted); font-size: 13px; text-align: center; margin-top: 40px;">
-          Select a task on the left or click <strong>Run Benchmark Fix</strong> to stream live execution traces.
+        <div style="color: var(--text-muted); font-size: 13px; text-align: center; margin-top: 40px; line-height: 1.7;">
+          Click <strong style="color: var(--success);">▶ Benchmark</strong> for a single autonomous repair,<br/>
+          <strong style="color: #818cf8;">⚡ 3x Swarm</strong> to run 3 parallel isolated sandboxes,<br/>
+          or <strong style="color: var(--accent);">+ Dispatch</strong> for a custom task.
         </div>
       </div>
     </div>
@@ -102,6 +115,30 @@ No diff generated yet.
     </div>
   </div>
 
-  <script src="app.js?v=3"></script>
+  <!-- Custom Task Dispatch Modal -->
+  <div class="modal-backdrop" id="dispatchModal">
+    <div class="modal-card">
+      <div class="modal-title">🚀 Dispatch Autonomous SWE Agent</div>
+      <div class="modal-sub">Choose a verified benchmark scenario or describe any repair task in <code style="color: var(--accent);">sample_repo</code>:</div>
+      <div class="preset-grid">
+        <button type="button" class="preset-chip" data-preset="Fix freight surcharge weight threshold in calculator.py and add insulation_r_value validation for temperature decay">
+          🧊 <strong>Cold-Chain Freight &amp; Temp Decay</strong> — Fix surcharge threshold &amp; zero-division guard in <code>calculator.py</code>
+        </button>
+        <button type="button" class="preset-chip" data-preset="Fix missing device_id validation and latitude boundary check in data_pipeline.py">
+          📡 <strong>IoT Telemetry Pipeline</strong> — Fix <code>KeyError</code> &amp; GPS latitude bounds in <code>data_pipeline.py</code>
+        </button>
+        <button type="button" class="preset-chip" data-preset="Fix all bugs across full repo multi-file suites (calculator.py and data_pipeline.py)">
+          🔥 <strong>Full Repository Multi-File Repair</strong> — Diagnose &amp; resolve all failing suites simultaneously
+        </button>
+      </div>
+      <textarea class="modal-textarea" id="customTaskInput" placeholder="Describe the bug or engineering task...">Fix missing device_id validation and latitude boundary check in data_pipeline.py</textarea>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost" id="btnModalCancel" style="padding: 8px 14px;">Cancel</button>
+        <button type="button" class="btn btn-primary" id="btnModalSubmit">Launch Isolated Sandbox</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=4"></script>
 </body>
 </html>

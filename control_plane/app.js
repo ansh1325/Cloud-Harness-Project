@@ -22,18 +22,52 @@ const prTitle = document.getElementById("prTitle");
 const prBody = document.getElementById("prBody");
 const activeTaskIdDisplay = document.getElementById("activeTaskIdDisplay");
 const btnBenchmark = document.getElementById("btnBenchmark");
+const btnSwarm = document.getElementById("btnSwarm");
 const btnNewTask = document.getElementById("btnNewTask");
 const btnClearSession = document.getElementById("btnClearSession");
+const dispatchModal = document.getElementById("dispatchModal");
+const customTaskInput = document.getElementById("customTaskInput");
+const btnModalCancel = document.getElementById("btnModalCancel");
+const btnModalSubmit = document.getElementById("btnModalSubmit");
+
+const stepNodes = {
+  ast: document.getElementById("stepAst"),
+  baseline: document.getElementById("stepBaseline"),
+  patch: document.getElementById("stepPatch"),
+  pr: document.getElementById("stepPR"),
+};
+
+function resetStepper() {
+  Object.values(stepNodes).forEach(el => {
+    if (el) el.className = "step-node";
+  });
+}
+
+function setPipelineStage(stage) {
+  const order = ["ast", "baseline", "patch", "pr"];
+  const idx = order.indexOf(stage);
+  if (idx === -1) return;
+  order.forEach((key, i) => {
+    const el = stepNodes[key];
+    if (!el) return;
+    if (i < idx) el.className = "step-node done";
+    else if (i === idx) el.className = stage === "pr" ? "step-node done" : "step-node active";
+    else el.className = "step-node";
+  });
+}
+
+function switchTab(tabId) {
+  document.querySelectorAll(".tab").forEach(t => {
+    t.classList.toggle("active", t.dataset.tab === tabId);
+  });
+  document.querySelectorAll(".tab-content").forEach(c => {
+    c.classList.toggle("active", c.id === tabId);
+  });
+}
 
 // Tabs
 document.querySelectorAll(".tab").forEach(tab => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-    document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
-    tab.classList.add("active");
-    const target = document.getElementById(tab.dataset.tab);
-    if (target) target.classList.add("active");
-  });
+  tab.addEventListener("click", () => switchTab(tab.dataset.tab));
 });
 
 // Fetch telemetry and pool status every 2 seconds
@@ -43,14 +77,18 @@ async function refreshMetrics() {
     if (!res.ok) return;
     const data = await res.json();
 
+    if (data.llm_engine) {
+      const engEl = document.getElementById("metricEngine");
+      if (engEl) engEl.innerText = data.llm_engine;
+    }
     if (data.telemetry) {
       document.getElementById("metricActiveAgents").innerText = data.telemetry.active_agents || 0;
       document.getElementById("metricSuccessRate").innerText = (data.telemetry.success_rate_percent || 100) + "%";
     }
     if (data.pool) {
       document.getElementById("metricWarmPool").innerText = data.pool.warm_pool_size || 0;
-      const p99Ms = data.pool.p99_startup_latency_ms || 1500;
-      document.getElementById("metricP99Latency").innerText = (p99Ms / 1000).toFixed(1) + "s";
+      const p99Ms = data.pool.p99_startup_latency_ms || 0;
+      document.getElementById("metricP99Latency").innerText = p99Ms > 0 ? (p99Ms / 1000).toFixed(2) + "s" : "<0.1s";
     }
   } catch (e) {
     // console.error("Telemetry fetch error:", e);
@@ -116,6 +154,8 @@ function selectTask(taskId) {
   });
 
   // Reset containers
+  resetStepper();
+  setPipelineStage("ast");
   traceContainer.innerHTML = "";
   terminalOutput.innerHTML = `<span class="term-line term-meta">[STREAM CONNECTED: ${taskId}]</span>`;
   diffOutput.innerHTML = "Awaiting diff updates...";
@@ -147,11 +187,27 @@ function handleStreamEvent(evt) {
 
   // 1. Thought / Tool Trace
   if (evt.event_type === "thought" || evt.event_type === "tool_call" || evt.event_type === "status") {
+    // Advance live pipeline stepper
+    if (evt.event_type === "tool_call" || (evt.message || "").includes("Scanning repository AST")) {
+      setPipelineStage("ast");
+    } else if ((evt.message || "").includes("baseline test")) {
+      setPipelineStage("baseline");
+    } else if (evt.message === "ACTIVE_REPAIR" || (evt.message || "").includes("Querying Groq") || (evt.message || "").includes("Applied")) {
+      setPipelineStage("patch");
+    } else if (evt.message === "RESOLVED") {
+      setPipelineStage("pr");
+    }
+
     const card = document.createElement("div");
     card.className = `trace-card ${evt.event_type}-trace`;
+    let extraBtn = "";
+    if (evt.event_type === "status" && evt.message === "RESOLVED") {
+      extraBtn = `<div><button class="inline-diff-btn" onclick="switchTab('tabDiff')">View Generated Diff →</button> <button class="inline-diff-btn" style="margin-left:6px;" onclick="switchTab('tabPR')">View PR Payload →</button></div>`;
+    }
     card.innerHTML = `
       <div class="trace-time">${timeStr} • [${evt.event_type.toUpperCase()}]</div>
       <div>${evt.message}</div>
+      ${extraBtn}
     `;
     traceContainer.appendChild(card);
     traceContainer.scrollTop = traceContainer.scrollHeight;
@@ -159,6 +215,8 @@ function handleStreamEvent(evt) {
 
   // 2. Terminal stdout/stderr (color-coded)
   if (evt.event_type === "terminal") {
+    if (evt.data && evt.data.phase === "baseline") setPipelineStage("baseline");
+    if (evt.data && evt.data.phase === "verify") setPipelineStage("patch");
     appendTerminalOutput(evt.message, timeStr);
   }
 
@@ -245,7 +303,7 @@ function renderDiff(rawDiff) {
 // 1-Click Benchmark Action
 btnBenchmark.addEventListener("click", async () => {
   btnBenchmark.disabled = true;
-  btnBenchmark.innerText = "⏳ Dispatching Agent...";
+  btnBenchmark.innerText = "⏳ Launching...";
   try {
     const res = await fetch(`/api/benchmark/run-sample?session_id=${encodeURIComponent(SESSION_ID)}`, { method: "POST" });
     const data = await res.json();
@@ -255,28 +313,80 @@ btnBenchmark.addEventListener("click", async () => {
     alert("Failed to start benchmark: " + e.message);
   } finally {
     btnBenchmark.disabled = false;
-    btnBenchmark.innerText = "▶ Run Benchmark Fix";
+    btnBenchmark.innerText = "▶ Benchmark";
   }
 });
 
-// Custom Task Action
-btnNewTask.addEventListener("click", async () => {
-  const desc = prompt("Enter bug description / coding task for SWE agent:", "Fix latitude validation boundary in data_pipeline.py");
-  if (!desc) return;
+// 1-Click 3x Parallel Swarm Burst
+if (btnSwarm) {
+  btnSwarm.addEventListener("click", async () => {
+    btnSwarm.disabled = true;
+    btnSwarm.innerText = "⏳ Spawning 3...";
+    try {
+      const res = await fetch(`/api/benchmark/run-swarm?session_id=${encodeURIComponent(SESSION_ID)}`, { method: "POST" });
+      const tasks = await res.json();
+      await loadTasks();
+      if (Array.isArray(tasks) && tasks.length > 0) {
+        selectTask(tasks[0].task_id);
+      }
+      refreshMetrics();
+    } catch (e) {
+      alert("Failed to launch swarm: " + e.message);
+    } finally {
+      btnSwarm.disabled = false;
+      btnSwarm.innerText = "⚡ 3x Swarm";
+    }
+  });
+}
 
-  try {
-    const res = await fetch("/api/tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task_description: desc, repo_name: "sample_repo", session_id: SESSION_ID })
-    });
-    const data = await res.json();
-    await loadTasks();
-    selectTask(data.task_id);
-  } catch (e) {
-    alert("Failed to dispatch task: " + e.message);
+// Custom Task Dispatch Modal
+function openModal() {
+  if (dispatchModal) {
+    dispatchModal.classList.add("open");
+    if (customTaskInput) customTaskInput.focus();
   }
+}
+function closeModal() {
+  if (dispatchModal) dispatchModal.classList.remove("open");
+}
+
+btnNewTask.addEventListener("click", openModal);
+if (btnModalCancel) btnModalCancel.addEventListener("click", closeModal);
+if (dispatchModal) {
+  dispatchModal.addEventListener("click", (e) => {
+    if (e.target === dispatchModal) closeModal();
+  });
+}
+document.querySelectorAll(".preset-chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    if (customTaskInput) customTaskInput.value = chip.dataset.preset || "";
+  });
 });
+
+if (btnModalSubmit) {
+  btnModalSubmit.addEventListener("click", async () => {
+    const desc = (customTaskInput ? customTaskInput.value : "").trim();
+    if (!desc) return;
+    btnModalSubmit.disabled = true;
+    btnModalSubmit.innerText = "Launching...";
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task_description: desc, repo_name: "sample_repo", session_id: SESSION_ID })
+      });
+      const data = await res.json();
+      closeModal();
+      await loadTasks();
+      selectTask(data.task_id);
+    } catch (e) {
+      alert("Failed to dispatch task: " + e.message);
+    } finally {
+      btnModalSubmit.disabled = false;
+      btnModalSubmit.innerText = "Launch Isolated Sandbox";
+    }
+  });
+}
 
 // Clear current browser session
 if (btnClearSession) {
@@ -288,14 +398,19 @@ if (btnClearSession) {
         activeEventSource = null;
       }
       currentTaskId = null;
+      resetStepper();
       activeTaskIdDisplay.innerText = "No task selected";
       traceContainer.innerHTML = `
-        <div style="color: var(--text-muted); font-size: 13px; text-align: center; margin-top: 40px;">
-          Select a task on the left or click <strong>Run Benchmark Fix</strong> to stream live execution traces.
+        <div style="color: var(--text-muted); font-size: 13px; text-align: center; margin-top: 40px; line-height: 1.7;">
+          Click <strong style="color: var(--success);">▶ Benchmark</strong> for a single autonomous repair,<br/>
+          <strong style="color: #818cf8;">⚡ 3x Swarm</strong> to run 3 parallel isolated sandboxes,<br/>
+          or <strong style="color: var(--accent);">+ Dispatch</strong> for a custom task.
         </div>
       `;
-      terminalOutput.innerText = "[HARNESS DAEMON ONLINE]\nWaiting for agent sandbox execution stream...";
+      terminalOutput.innerHTML = `<span class="term-line term-meta">[HARNESS DAEMON ONLINE]\nWaiting for agent sandbox execution stream...</span>`;
       diffOutput.innerHTML = "No diff generated yet.";
+      const diffBadge = document.getElementById("diffBadge");
+      if (diffBadge) { diffBadge.innerText = ""; diffBadge.classList.remove("visible"); }
       prTitle.innerText = "PR Not Ready";
       prBody.innerText = "Pending verification...";
       await loadTasks();

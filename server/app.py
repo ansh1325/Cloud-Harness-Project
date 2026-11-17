@@ -15,7 +15,10 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, StreamingResponse
+from dotenv import load_dotenv
 from pydantic import BaseModel
+
+load_dotenv()
 
 from sandbox.manager import PrewarmedSandboxPool
 from agent.loop import AutonomousExecutionLoop, LoopEvent, AgentLoopResult
@@ -230,15 +233,25 @@ async def stream_task_events(task_id: str):
     )
 
 
+def _active_llm_engine() -> str:
+    if os.getenv("GROQ_API_KEY"):
+        model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").split("/")[-1]
+        return f"Groq ({model})"
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+        return "Gemini Flash"
+    return "AST Solver"
+
+
 @app.get("/api/pool/metrics")
 async def get_pool_metrics():
-    """Returns real-time telemetry: warm sandboxes, P99 startup latency, active workers."""
+    """Returns real-time telemetry: warm sandboxes, P99 startup latency, active workers, LLM engine."""
     global sandbox_pool
     pool_metrics = sandbox_pool.get_metrics() if sandbox_pool else {}
     telemetry_data = telemetry.get_summary()
     return {
         "pool": pool_metrics.model_dump() if hasattr(pool_metrics, "model_dump") else pool_metrics,
-        "telemetry": telemetry_data
+        "telemetry": telemetry_data,
+        "llm_engine": _active_llm_engine()
     }
 
 
@@ -252,6 +265,26 @@ async def trigger_sample_benchmark(background_tasks: BackgroundTasks, session_id
         session_id=session_id
     )
     return await create_task(req, background_tasks)
+
+
+@app.post("/api/benchmark/run-swarm")
+async def trigger_parallel_swarm(background_tasks: BackgroundTasks, session_id: Optional[str] = None):
+    """Launches 3 isolated concurrent SWE agents simultaneously to showcase pre-warmed sandbox parallelism."""
+    swarm_specs = [
+        "Fix freight surcharge weight threshold in calculator.py and add insulation_r_value validation",
+        "Fix missing device_id guard and latitude boundary validation in data_pipeline.py",
+        "Fix all bugs across full repo multi-file suites (calculator.py & data_pipeline.py)"
+    ]
+    created = []
+    for desc in swarm_specs:
+        req = CreateTaskRequest(
+            task_description=desc,
+            repo_name="sample_repo",
+            max_iterations=3,
+            session_id=session_id
+        )
+        created.append(await create_task(req, background_tasks))
+    return created
 
 
 # Mount static frontend
