@@ -8,16 +8,14 @@
 [![Pytest](https://img.shields.io/badge/Testing-Pytest_8.1-0A9EDC.svg?logo=pytest&logoColor=white)](https://docs.pytest.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-![Resume Reference](image.png)
-
-> **Portfolio Implementation & Technical Reference**  
+> **Autonomous SWE Agent Platform & Cloud Infrastructure**  
 > Architected as an enterprise-grade cloud coding-agent harness designed to orchestrate **100+ concurrent autonomous software engineering (SWE) agents** in isolated cloud sandboxes, slashing cold-start environment initialization to **under 5 seconds**, and providing real-time execution observability via a streaming web control plane.
 
 ---
 
 ## 📑 Table of Contents
 - [Executive Summary](#-executive-summary)
-- [Core Architectural Pillars (From Resume)](#-core-architectural-pillars)
+- [Core Architectural Pillars](#-core-architectural-pillars)
 - [System Architecture & Flowchart](#-system-architecture--flowchart)
 - [Sandbox Pre-Warming & <5s Startup Engine](#-sandbox-pre-warming---5s-startup-engine)
 - [Autonomous SWE Execution Lifecycle](#-autonomous-swe-execution-lifecycle)
@@ -315,8 +313,7 @@ cloud-native-ai-coding-harness/
 ├── docker-compose.yml                 # Multi-container production stack
 ├── Makefile                           # Convenience CLI shortcuts (make test, make run)
 ├── README.md                          # Full architectural documentation
-├── requirements.txt                   # Production Python dependencies
-└── image.png                          # User-provided resume blueprint image
+└── requirements.txt                   # Production Python dependencies
 ```
 
 ---
