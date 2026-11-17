@@ -154,8 +154,9 @@ function handleStreamEvent(evt) {
   }
 
   // Refresh tasks on completion
-  if (evt.event_type === "status" && ["RESOLVED", "FAILED"].includes(evt.message)) {
+  if (evt.event_type === "status" && ["RESOLVED", "FAILED", "ERROR"].includes(evt.message)) {
     loadTasks();
+    refreshMetrics();
   }
 }
 

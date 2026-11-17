@@ -33,5 +33,5 @@ class AgentToolbox:
 
     async def run_pytest(self, test_path: str = "tests") -> SandboxExecutionResult:
         """Runs pytest on the test path."""
-        cmd = f"python -m pytest {test_path} -v --tb=short"
+        cmd = f"python -m pytest {test_path} -v --tb=short -p no:asyncio"
         return await self.sandbox.execute_command(cmd)

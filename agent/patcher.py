@@ -28,8 +28,8 @@ class PatchGenerator:
         modified_content: str,
         filename: str = "modified_file.py"
     ) -> str:
-        orig_lines = original_content.splitlines(keepends=True)
-        mod_lines = modified_content.splitlines(keepends=True)
+        orig_lines = original_content.replace("\r\n", "\n").splitlines()
+        mod_lines = modified_content.replace("\r\n", "\n").splitlines()
 
         diff = difflib.unified_diff(
             orig_lines,
@@ -38,7 +38,7 @@ class PatchGenerator:
             tofile=f"b/{filename}",
             lineterm=""
         )
-        return "".join(diff)
+        return "\n".join(diff)
 
     @staticmethod
     def generate_patch(

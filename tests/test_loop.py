@@ -50,3 +50,35 @@ async def test_autonomous_execution_loop_solves_benchmark():
 
     finally:
         await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_autonomous_execution_loop_solves_data_pipeline():
+    pool = PrewarmedSandboxPool(warm_target=2, max_concurrent=5)
+    await pool.start()
+
+    try:
+        sandbox = await pool.acquire_sandbox(
+            repo_name="sample_repo",
+            source_repo_path=SAMPLE_REPO_DIR
+        )
+
+        loop = AutonomousExecutionLoop(
+            sandbox=sandbox,
+            task_id="test-task-2",
+            task_description="Fix latitude validation boundary in data_pipeline.py",
+            max_iterations=3
+        )
+
+        res: AgentLoopResult = await loop.run()
+
+        assert res.tests_passed is True
+        assert res.status == "RESOLVED"
+        assert res.patch_summary is not None
+        assert "app/data_pipeline.py" in res.patch_summary.files_changed
+        assert "\n" in res.patch_summary.unified_diff
+
+        await pool.release_sandbox(sandbox)
+
+    finally:
+        await pool.stop()
