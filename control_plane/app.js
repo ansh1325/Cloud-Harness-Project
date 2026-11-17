@@ -117,8 +117,10 @@ function selectTask(taskId) {
 
   // Reset containers
   traceContainer.innerHTML = "";
-  terminalOutput.innerText = `[STREAM CONNECTED: ${taskId}]\n`;
+  terminalOutput.innerHTML = `<span class="term-line term-meta">[STREAM CONNECTED: ${taskId}]</span>`;
   diffOutput.innerHTML = "Awaiting diff updates...";
+  const diffBadge = document.getElementById("diffBadge");
+  if (diffBadge) { diffBadge.innerText = ""; diffBadge.classList.remove("visible"); }
   prTitle.innerText = "PR Not Ready";
   prBody.innerText = "Pending task verification...";
 
@@ -155,10 +157,9 @@ function handleStreamEvent(evt) {
     traceContainer.scrollTop = traceContainer.scrollHeight;
   }
 
-  // 2. Terminal stdout/stderr
+  // 2. Terminal stdout/stderr (color-coded)
   if (evt.event_type === "terminal") {
-    terminalOutput.innerText += `\n[${timeStr}] === Sandbox Terminal Output ===\n${evt.message}\n`;
-    terminalOutput.scrollTop = terminalOutput.scrollHeight;
+    appendTerminalOutput(evt.message, timeStr);
   }
 
   // 3. Diff Window
@@ -170,6 +171,11 @@ function handleStreamEvent(evt) {
   if (evt.event_type === "patch" && evt.data) {
     prTitle.innerText = evt.data.pr_title || "Autonomous Fix PR";
     prBody.innerText = evt.data.pr_body || "";
+    const diffBadge = document.getElementById("diffBadge");
+    if (diffBadge && (evt.data.insertions || evt.data.deletions)) {
+      diffBadge.innerText = `+${evt.data.insertions || 0}/-${evt.data.deletions || 0}`;
+      diffBadge.classList.add("visible");
+    }
     if (evt.data.unified_diff) {
       renderDiff(evt.data.unified_diff);
     }
@@ -180,6 +186,38 @@ function handleStreamEvent(evt) {
     loadTasks();
     refreshMetrics();
   }
+}
+
+function appendTerminalOutput(rawText, timeStr) {
+  const lines = (rawText || "").split("\n");
+  lines.forEach(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    // Skip noisy pytest separator bars
+    if (/^[=\-_]{10,}$/.test(trimmed)) return;
+    const span = document.createElement("span");
+    if (trimmed.startsWith("[PHASE 2") && trimmed.includes("PASSED")) {
+      span.className = "term-line term-phase-pass";
+      span.innerText = `${timeStr}  ${trimmed}`;
+    } else if (trimmed.startsWith("[PHASE ")) {
+      span.className = "term-line term-phase";
+      span.innerText = `${timeStr}  ${trimmed}`;
+    } else if (/\bPASSED\b/.test(line) || /\d+ passed/.test(line) && !/failed/.test(line)) {
+      span.className = "term-line term-pass";
+      span.innerText = line;
+    } else if (/\bFAILED\b|Error:|AssertionError|KeyError|ZeroDivisionError/.test(line)) {
+      span.className = "term-line term-fail";
+      span.innerText = line;
+    } else if (trimmed.startsWith("collecting") || trimmed.startsWith("collected")) {
+      span.className = "term-line term-meta";
+      span.innerText = line;
+    } else {
+      span.className = "term-line";
+      span.innerText = line;
+    }
+    terminalOutput.appendChild(span);
+  });
+  terminalOutput.scrollTop = terminalOutput.scrollHeight;
 }
 
 function renderDiff(rawDiff) {

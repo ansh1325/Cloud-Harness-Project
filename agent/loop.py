@@ -114,11 +114,16 @@ class AutonomousExecutionLoop:
         # =================================================================
         # PHASE 2: INITIAL BASELINE TEST VERIFICATION
         # =================================================================
-        await self._emit("thought", f"Executing baseline test suite [{target_test_suite}] inside sandbox to observe failure traces...")
+        await self._emit("thought", f"Executing baseline test suite [{target_test_suite}] inside sandbox to reproduce bug...")
         baseline_test = await self.toolbox.run_pytest(target_test_suite)
-        await self._emit("terminal", baseline_test.stdout + baseline_test.stderr, {
+        baseline_log = (
+            f"[PHASE 1 • BASELINE REPRODUCTION] pytest {target_test_suite}\n"
+            + (baseline_test.stdout + baseline_test.stderr).strip()
+        )
+        await self._emit("terminal", baseline_log, {
             "exit_code": baseline_test.exit_code,
-            "duration_ms": baseline_test.duration_ms
+            "duration_ms": baseline_test.duration_ms,
+            "phase": "baseline"
         })
 
         if baseline_test.exit_code == 0:
@@ -171,13 +176,16 @@ class AutonomousExecutionLoop:
             await self._emit("diff", current_diff, {"diff": current_diff})
 
             # Run test suite in sandbox
-            await self._emit("thought", f"Re-testing sandbox workspace [{target_test_suite}] after iteration {iteration} modifications...")
+            await self._emit("thought", f"Re-testing sandbox workspace [{target_test_suite}] after iteration {iteration} patch...")
             test_res = await self.toolbox.run_pytest(target_test_suite)
             last_test_output = test_res.stdout + test_res.stderr
 
-            await self._emit("terminal", last_test_output, {
+            phase_label = "POST-PATCH VERIFICATION — PASSED" if test_res.exit_code == 0 else f"ITERATION {iteration} VERIFICATION"
+            verify_log = f"[PHASE 2 • {phase_label}] pytest {target_test_suite}\n" + last_test_output.strip()
+            await self._emit("terminal", verify_log, {
                 "exit_code": test_res.exit_code,
-                "iteration": iteration
+                "iteration": iteration,
+                "phase": "verify"
             })
 
             if test_res.exit_code == 0:
@@ -227,9 +235,12 @@ class AutonomousExecutionLoop:
         configured; falls back cleanly to AST-guided deterministic solver for
         benchmark tasks so the harness runs reliably with or without API keys.
         """
+        groq_key = os.getenv("GROQ_API_KEY")
         gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        if self.llm_client or gemini_key:
-            llm_applied = await self._call_llm_for_edits(candidate_files, test_output, gemini_key)
+        if self.llm_client or groq_key or gemini_key:
+            llm_applied = await self._call_llm_for_edits(
+                candidate_files, test_output, gemini_key=gemini_key, groq_key=groq_key
+            )
             if llm_applied:
                 return True
 
@@ -302,10 +313,11 @@ class AutonomousExecutionLoop:
         self,
         candidate_files: List[str],
         test_output: str,
-        gemini_key: Optional[str] = None
+        gemini_key: Optional[str] = None,
+        groq_key: Optional[str] = None
     ) -> bool:
-        """Calls Google Gemini API to synthesize surgical JSON edits when GEMINI_API_KEY is configured."""
-        if not gemini_key:
+        """Calls Groq or Google Gemini API to synthesize surgical JSON edits when an API key is configured."""
+        if not groq_key and not gemini_key:
             return False
 
         # Build compact source context for non-test candidate files
@@ -333,42 +345,63 @@ class AutonomousExecutionLoop:
             "Do not include markdown fences or commentary outside the JSON array."
         )
 
-        model_name = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}
-        }
-
+        raw_text = None
         try:
-            await self._emit("thought", f"Querying Gemini ({model_name}) to synthesize surgical patch...")
             async with httpx.AsyncClient(timeout=25.0) as client:
-                resp = await client.post(url, json=payload)
-                if resp.status_code != 200:
-                    await self._emit("thought", f"LLM API returned HTTP {resp.status_code}; falling back to AST-guided solver.")
-                    return False
-                body = resp.json()
-                raw_text = body["candidates"][0]["content"]["parts"][0]["text"]
-                cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text.strip(), flags=re.MULTILINE)
-                edits = json.loads(cleaned)
-                if not isinstance(edits, list):
-                    return False
+                if groq_key:
+                    groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+                    await self._emit("thought", f"Querying Groq ({groq_model}) to synthesize surgical patch...")
+                    resp = await client.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                        json={
+                            "model": groq_model,
+                            "temperature": 0.0,
+                            "messages": [
+                                {"role": "system", "content": "You are a precise SWE repair agent. Output ONLY valid JSON."},
+                                {"role": "user", "content": prompt}
+                            ]
+                        }
+                    )
+                    if resp.status_code == 200:
+                        raw_text = resp.json()["choices"][0]["message"]["content"]
+                if not raw_text and gemini_key:
+                    model_name = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
+                    await self._emit("thought", f"Querying Gemini ({model_name}) to synthesize surgical patch...")
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_key}"
+                    resp = await client.post(
+                        url,
+                        json={
+                            "contents": [{"parts": [{"text": prompt}]}],
+                            "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}
+                        }
+                    )
+                    if resp.status_code == 200:
+                        raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
 
-                applied = False
-                for edit in edits:
-                    fp = edit.get("file_path")
-                    target = edit.get("target")
-                    replacement = edit.get("replacement")
-                    thought = edit.get("thought")
-                    if thought:
-                        await self._emit("thought", thought)
-                    if fp and target is not None and replacement is not None:
-                        try:
-                            self.toolbox.edit_file(fp, target, replacement)
-                            applied = True
-                        except Exception:
-                            continue
-                return applied
+            if not raw_text:
+                return False
+
+            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text.strip(), flags=re.MULTILINE)
+            edits = json.loads(cleaned)
+            if not isinstance(edits, list):
+                return False
+
+            applied = False
+            for edit in edits:
+                fp = edit.get("file_path")
+                target = edit.get("target")
+                replacement = edit.get("replacement")
+                thought = edit.get("thought")
+                if thought:
+                    await self._emit("thought", thought)
+                if fp and target is not None and replacement is not None:
+                    try:
+                        self.toolbox.edit_file(fp, target, replacement)
+                        applied = True
+                    except Exception:
+                        continue
+            return applied
         except Exception as e:
             await self._emit("thought", f"LLM synthesis skipped ({type(e).__name__}); using deterministic AST solver.")
             return False
