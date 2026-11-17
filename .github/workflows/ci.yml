@@ -33,3 +33,20 @@ jobs:
           PYTHONPATH: .
         run: |
           python -m pytest tests/ -v --tb=short
+
+  react-control-plane:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build React Control Plane
+        working-directory: control_plane
+        run: |
+          npm install --no-audit --no-fund
+          npm run build

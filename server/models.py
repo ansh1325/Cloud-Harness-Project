@@ -9,6 +9,7 @@ import time
 class CreateTaskRequest(BaseModel):
     task_description: str = Field(..., description="Issue description or bug report to fix")
     repo_name: str = Field(default="sample_repo", description="Target repository identifier")
+    repo_url: Optional[str] = Field(default=None, description="Optional public GitHub repository URL to clone and repair")
     max_iterations: int = Field(default=5, ge=1, le=10)
     session_id: Optional[str] = Field(default=None, description="Optional browser session scope")
 

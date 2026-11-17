@@ -2,13 +2,12 @@
 Cloud Sandbox Pre-Warming Pool & Orchestrator Manager
 Guarantees <5-second sandbox startup SLA and orchestrates 100+ concurrent agent workers.
 """
-import os
 import shutil
 import uuid
 import asyncio
 import time
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, Optional
 from pydantic import BaseModel
 
 from .container_runner import SandboxEnvironment
@@ -27,7 +26,7 @@ class SandboxMetrics(BaseModel):
 class PrewarmedSandboxPool:
     """
     Maintains a pool of pre-warmed execution sandboxes to eliminate container cold-start delay.
-    Orchestrates high-concurrency workloads up to 100+ concurrent agents.
+    Uses non-blocking worker threads and per-repo locks for thread-safe 100+ concurrency.
     """
 
     def __init__(
@@ -50,18 +49,25 @@ class PrewarmedSandboxPool:
         self.active_sandboxes: Dict[str, SandboxEnvironment] = {}
         self.startup_latencies: list[float] = []
         self.total_acquired = 0
+        self._repo_locks: Dict[str, asyncio.Lock] = {}
 
         self._replenish_task: Optional[asyncio.Task] = None
         self._running = False
 
+    def _get_repo_lock(self, key: str) -> asyncio.Lock:
+        lock = self._repo_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._repo_locks[key] = lock
+        return lock
+
     async def start(self):
         """Starts the background pre-warming engine."""
         self._running = True
-        # Pre-populate warm pool
         for _ in range(self.warm_target):
             sandbox = self._create_pristine_sandbox()
             await self.warm_pool.put(sandbox)
-        
+
         self._replenish_task = asyncio.create_task(self._pool_replenish_loop())
 
     async def stop(self):
@@ -95,9 +101,9 @@ class PrewarmedSandboxPool:
         while self._running:
             try:
                 if self.warm_pool.qsize() < self.warm_target:
-                    sandbox = self._create_pristine_sandbox()
+                    sandbox = await asyncio.to_thread(self._create_pristine_sandbox)
                     await self.warm_pool.put(sandbox)
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.35)
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -106,42 +112,57 @@ class PrewarmedSandboxPool:
     async def acquire_sandbox(
         self,
         repo_name: Optional[str] = None,
-        source_repo_path: Optional[Path] = None
+        source_repo_path: Optional[Path] = None,
+        repo_url: Optional[str] = None
     ) -> SandboxEnvironment:
         """
-        Acquires an isolated sandbox for an agent.
-        Startup latency is guaranteed < 5 seconds due to warm pre-allocation and fast caching.
+        Acquires an isolated sandbox for an agent without blocking the event loop.
+        Supports both local benchmark repos and public GitHub URLs with on-disk caching.
         """
         start_time = time.perf_counter()
-
-        # Enforce global concurrency throttling (100+ agents)
         await self.semaphore.acquire()
 
-        # 1. Grab warm sandbox or instantly allocate
         try:
-            sandbox = self.warm_pool.get_nowait()
-        except asyncio.QueueEmpty:
-            sandbox = self._create_pristine_sandbox()
+            try:
+                sandbox = self.warm_pool.get_nowait()
+            except asyncio.QueueEmpty:
+                sandbox = await asyncio.to_thread(self._create_pristine_sandbox)
 
-        # 2. Provision repository into sandbox workspace from cache
-        if repo_name and source_repo_path:
-            self.cache.cache_local_repo(source_repo_path, repo_name)
-            self.cache.provision_workspace_from_cache(repo_name, sandbox.workspace_path)
+            cache_key = repo_name
+            if repo_url:
+                lock = self._get_repo_lock(repo_url)
+                async with lock:
+                    cache_key = await asyncio.to_thread(self.cache.cache_git_repo, repo_url)
+                await asyncio.to_thread(
+                    self.cache.provision_workspace_from_cache,
+                    cache_key,
+                    sandbox.workspace_path
+                )
+            elif repo_name and source_repo_path:
+                lock = self._get_repo_lock(repo_name)
+                async with lock:
+                    await asyncio.to_thread(self.cache.cache_local_repo, source_repo_path, repo_name)
+                await asyncio.to_thread(
+                    self.cache.provision_workspace_from_cache,
+                    repo_name,
+                    sandbox.workspace_path
+                )
 
-        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
-        self.startup_latencies.append(elapsed_ms)
-        self.active_sandboxes[sandbox.sandbox_id] = sandbox
-        self.total_acquired += 1
-
-        return sandbox
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+            self.startup_latencies.append(elapsed_ms)
+            self.active_sandboxes[sandbox.sandbox_id] = sandbox
+            self.total_acquired += 1
+            return sandbox
+        except Exception:
+            self.semaphore.release()
+            raise
 
     async def release_sandbox(self, sandbox: SandboxEnvironment):
-        """Releases the sandbox and recycles workspace."""
+        """Releases the sandbox and recycles workspace asynchronously."""
         if sandbox.sandbox_id in self.active_sandboxes:
             del self.active_sandboxes[sandbox.sandbox_id]
 
         self.semaphore.release()
-        # Non-blocking cleanup in background
         asyncio.create_task(asyncio.to_thread(self._destroy_sandbox, sandbox))
 
     def get_metrics(self) -> SandboxMetrics:

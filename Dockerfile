@@ -1,6 +1,14 @@
+# Stage 1: Build React 18 Control Plane (Vite)
+FROM node:20-alpine AS frontend-builder
+WORKDIR /frontend
+COPY control_plane/package.json ./
+RUN npm install --no-audit --no-fund
+COPY control_plane/ ./
+RUN npm run build
+
+# Stage 2: Production Python FastAPI + Sandbox Orchestrator
 FROM python:3.12-slim
 
-# System tools & build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -14,8 +22,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code and control plane
-COPY . .
+# Copy backend source and built React control plane
+COPY agent/ ./agent/
+COPY sandbox/ ./sandbox/
+COPY server/ ./server/
+COPY benchmarks/ ./benchmarks/
+COPY tests/ ./tests/
+COPY pytest.ini .
+COPY --from=frontend-builder /frontend/dist ./control_plane/dist
 
 # Non-root user for isolated sandbox security
 RUN useradd -m -u 1000 harnessuser && chown -R harnessuser:harnessuser /app

@@ -29,6 +29,10 @@ htmlcov/
 .env.local
 *.env
 
+# Node / React Control Plane build outputs
+control_plane/node_modules/
+control_plane/dist/
+
 # IDE settings
 .vscode/
 .idea/

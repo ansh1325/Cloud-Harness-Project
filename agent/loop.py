@@ -77,7 +77,7 @@ class AutonomousExecutionLoop:
         task_lower = self.task_description.lower()
         # Full-repo multi-file tasks run all tests
         if any(kw in task_lower for kw in ("all bugs", "all suites", "full repo", "multi-file", "both")):
-            return "tests"
+            return "tests" if (self.sandbox.workspace_path / "tests").exists() else "."
         if any(kw in task_lower for kw in ("data_pipeline", "latitude", "device_id", "telemetry", "sanitize")):
             if (self.sandbox.workspace_path / "tests/test_data_pipeline.py").exists():
                 return "tests/test_data_pipeline.py"
@@ -90,7 +90,9 @@ class AutonomousExecutionLoop:
                 test_file = f"tests/test_{stem}.py"
                 if (self.sandbox.workspace_path / test_file).exists():
                     return test_file
-        return "tests"
+        if (self.sandbox.workspace_path / "tests").exists():
+            return "tests"
+        return "."
 
     async def run(self) -> AgentLoopResult:
         start_time = time.perf_counter()
@@ -217,8 +219,9 @@ class AutonomousExecutionLoop:
         )
 
         final_status = "RESOLVED" if tests_passed else "FAILED"
-        await self._emit("status", final_status, {"status": final_status})
+        # Emit patch BEFORE terminal status so SSE subscribers receive PR payload & diff before stream closes
         await self._emit("patch", patch_summary.pr_title, patch_summary.model_dump())
+        await self._emit("status", final_status, {"status": final_status})
 
         duration = round(time.perf_counter() - start_time, 2)
         return AgentLoopResult(
@@ -246,8 +249,10 @@ class AutonomousExecutionLoop:
         """
         groq_key = os.getenv("GROQ_API_KEY")
         gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        # Try LLM on iteration 1 (and iteration 2+ for non-benchmark tasks); always keep AST solver as guaranteed fallback
-        if (self.llm_client or groq_key or gemini_key) and iteration == 1:
+        # Use LLM for initial diagnosis + multi-turn traceback self-correction (Iterations 1..max-1),
+        # preserving deterministic AST repair fallback on final retry or API failure.
+        use_llm = (self.llm_client or groq_key or gemini_key) and (iteration < self.max_iterations or self.max_iterations == 1)
+        if use_llm:
             llm_applied = await self._call_llm_for_edits(
                 candidate_files, test_output, target_test_suite=target_test_suite,
                 gemini_key=gemini_key, groq_key=groq_key
