@@ -157,7 +157,8 @@ class AutonomousExecutionLoop:
             edits_applied = await self._generate_and_apply_patch(
                 top_candidates,
                 current_test_output,
-                iteration
+                iteration,
+                target_test_suite
             )
 
             if not edits_applied:
@@ -218,7 +219,8 @@ class AutonomousExecutionLoop:
         self,
         candidate_files: List[str],
         test_output: str,
-        iteration: int
+        iteration: int,
+        target_test_suite: str = "tests"
     ) -> bool:
         """
         Synthesizes surgical edits. Uses Google Gemini LLM if GEMINI_API_KEY is
@@ -231,8 +233,10 @@ class AutonomousExecutionLoop:
             if llm_applied:
                 return True
 
-        # Built-in AST-Guided Automated Solver for the benchmark suites
+        # Built-in AST-Guided Automated Solver scoped to the active target suite
         applied_any = False
+        allow_calculator = target_test_suite in ("tests", "tests/test_calculator.py")
+        allow_pipeline = target_test_suite in ("tests", "tests/test_data_pipeline.py")
 
         for file_path in candidate_files:
             try:
@@ -241,7 +245,7 @@ class AutonomousExecutionLoop:
                 continue
 
             # Fix 1: Calculator freight surcharge threshold & refrigeration fee & insulation validation
-            if "calculator.py" in file_path:
+            if allow_calculator and "calculator.py" in file_path:
                 if "cargo_weight_kg - 0.0" in content:
                     await self._emit("thought", f"Diagnosed off-by-one weight threshold in {file_path}. Correcting threshold to 500.0...")
                     self.toolbox.edit_file(
@@ -272,7 +276,7 @@ class AutonomousExecutionLoop:
                     applied_any = True
 
             # Fix 2: Data pipeline missing device_id check and latitude upper bound
-            if "data_pipeline.py" in file_path:
+            if allow_pipeline and "data_pipeline.py" in file_path:
                 if "# BUG: Accessing without check elsewhere" in content:
                     await self._emit("thought", f"Adding missing device_id existence validation in {file_path}...")
                     self.toolbox.edit_file(

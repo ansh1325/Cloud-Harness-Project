@@ -2,6 +2,17 @@
 let currentTaskId = null;
 let activeEventSource = null;
 
+// Per-browser-tab session isolation so each visitor starts with a clean workspace
+function getSessionId() {
+  let sid = sessionStorage.getItem("harness_session_id");
+  if (!sid) {
+    sid = "sess-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    sessionStorage.setItem("harness_session_id", sid);
+  }
+  return sid;
+}
+const SESSION_ID = getSessionId();
+
 // DOM Elements
 const taskListContainer = document.getElementById("taskListContainer");
 const traceContainer = document.getElementById("traceContainer");
@@ -12,6 +23,7 @@ const prBody = document.getElementById("prBody");
 const activeTaskIdDisplay = document.getElementById("activeTaskIdDisplay");
 const btnBenchmark = document.getElementById("btnBenchmark");
 const btnNewTask = document.getElementById("btnNewTask");
+const btnClearSession = document.getElementById("btnClearSession");
 
 // Tabs
 document.querySelectorAll(".tab").forEach(tab => {
@@ -45,15 +57,25 @@ async function refreshMetrics() {
   }
 }
 
-// Fetch all tasks
+// Fetch tasks scoped to this browser session
 async function loadTasks() {
   try {
-    const res = await fetch("/api/tasks");
+    const res = await fetch(`/api/tasks?session_id=${encodeURIComponent(SESSION_ID)}`);
     if (!res.ok) return;
     const tasks = await res.json();
-    document.getElementById("taskCount").innerText = `${tasks.length} Tasks`;
+    document.getElementById("taskCount").innerText = `${tasks.length} ${tasks.length === 1 ? "Task" : "Tasks"}`;
 
     taskListContainer.innerHTML = "";
+    if (tasks.length === 0) {
+      taskListContainer.innerHTML = `
+        <div style="color: var(--text-muted); font-size: 12px; text-align: center; margin-top: 28px; line-height: 1.6;">
+          No active agents in this session.<br/>
+          Click <strong style="color: var(--success);">▶ Run Benchmark Fix</strong> or <strong style="color: var(--accent);">+ Dispatch Agent</strong> above.
+        </div>
+      `;
+      return;
+    }
+
     tasks.forEach(task => {
       const el = document.createElement("div");
       el.className = `task-item ${task.task_id === currentTaskId ? "active" : ""}`;
@@ -187,7 +209,7 @@ btnBenchmark.addEventListener("click", async () => {
   btnBenchmark.disabled = true;
   btnBenchmark.innerText = "⏳ Dispatching Agent...";
   try {
-    const res = await fetch("/api/benchmark/run-sample", { method: "POST" });
+    const res = await fetch(`/api/benchmark/run-sample?session_id=${encodeURIComponent(SESSION_ID)}`, { method: "POST" });
     const data = await res.json();
     await loadTasks();
     selectTask(data.task_id);
@@ -208,7 +230,7 @@ btnNewTask.addEventListener("click", async () => {
     const res = await fetch("/api/tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task_description: desc, repo_name: "sample_repo" })
+      body: JSON.stringify({ task_description: desc, repo_name: "sample_repo", session_id: SESSION_ID })
     });
     const data = await res.json();
     await loadTasks();
@@ -217,6 +239,33 @@ btnNewTask.addEventListener("click", async () => {
     alert("Failed to dispatch task: " + e.message);
   }
 });
+
+// Clear current browser session
+if (btnClearSession) {
+  btnClearSession.addEventListener("click", async () => {
+    try {
+      await fetch(`/api/tasks?session_id=${encodeURIComponent(SESSION_ID)}`, { method: "DELETE" });
+      if (activeEventSource) {
+        activeEventSource.close();
+        activeEventSource = null;
+      }
+      currentTaskId = null;
+      activeTaskIdDisplay.innerText = "No task selected";
+      traceContainer.innerHTML = `
+        <div style="color: var(--text-muted); font-size: 13px; text-align: center; margin-top: 40px;">
+          Select a task on the left or click <strong>Run Benchmark Fix</strong> to stream live execution traces.
+        </div>
+      `;
+      terminalOutput.innerText = "[HARNESS DAEMON ONLINE]\nWaiting for agent sandbox execution stream...";
+      diffOutput.innerHTML = "No diff generated yet.";
+      prTitle.innerText = "PR Not Ready";
+      prBody.innerText = "Pending verification...";
+      await loadTasks();
+    } catch (e) {
+      console.error("Failed to clear session:", e);
+    }
+  });
+}
 
 // Initial boot
 loadTasks();

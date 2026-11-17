@@ -138,6 +138,7 @@ async def create_task(req: CreateTaskRequest, background_tasks: BackgroundTasks)
 
     task_record = {
         "task_id": task_id,
+        "session_id": req.session_id,
         "repo_name": req.repo_name,
         "task_description": req.task_description,
         "status": "QUEUED",
@@ -155,16 +156,32 @@ async def create_task(req: CreateTaskRequest, background_tasks: BackgroundTasks)
     event_queues[task_id] = []
 
     background_tasks.add_task(run_agent_task_worker, task_id, req)
-    return AgentTaskResponse(**task_record)
+    return AgentTaskResponse(**{k: v for k, v in task_record.items() if k not in ("events", "session_id")})
 
 
 @app.get("/api/tasks", response_model=List[AgentTaskResponse])
-async def list_tasks():
-    """Returns all active and completed tasks."""
+async def list_tasks(session_id: Optional[str] = None):
+    """Returns active and completed tasks, optionally isolated to a browser session."""
+    tasks = list(task_store.values())
+    if session_id is not None:
+        tasks = [t for t in tasks if t.get("session_id") == session_id]
     return [
-        AgentTaskResponse(**{k: v for k, v in t.items() if k != "events"})
-        for t in reversed(list(task_store.values()))
+        AgentTaskResponse(**{k: v for k, v in t.items() if k not in ("events", "session_id")})
+        for t in reversed(tasks)
     ]
+
+
+@app.delete("/api/tasks")
+async def clear_tasks(session_id: Optional[str] = None):
+    """Clears tasks for a specific browser session (or all if no session_id)."""
+    to_remove = [
+        tid for tid, t in task_store.items()
+        if session_id is None or t.get("session_id") == session_id
+    ]
+    for tid in to_remove:
+        task_store.pop(tid, None)
+        event_queues.pop(tid, None)
+    return {"cleared": len(to_remove)}
 
 
 @app.get("/api/tasks/{task_id}", response_model=AgentTaskResponse)
@@ -173,7 +190,7 @@ async def get_task(task_id: str):
     if task_id not in task_store:
         raise HTTPException(status_code=404, detail="Task not found")
     t = task_store[task_id]
-    return AgentTaskResponse(**{k: v for k, v in t.items() if k != "events"})
+    return AgentTaskResponse(**{k: v for k, v in t.items() if k not in ("events", "session_id")})
 
 
 @app.get("/api/tasks/{task_id}/events")
@@ -226,12 +243,13 @@ async def get_pool_metrics():
 
 
 @app.post("/api/benchmark/run-sample")
-async def trigger_sample_benchmark(background_tasks: BackgroundTasks):
+async def trigger_sample_benchmark(background_tasks: BackgroundTasks, session_id: Optional[str] = None):
     """1-Click launch of the Freight Surcharge & Temperature Decay repair benchmark."""
     req = CreateTaskRequest(
         task_description="Fix freight surcharge weight threshold in calculator.py and add insulation_r_value validation for temperature decay",
         repo_name="sample_repo",
-        max_iterations=3
+        max_iterations=3,
+        session_id=session_id
     )
     return await create_task(req, background_tasks)
 
