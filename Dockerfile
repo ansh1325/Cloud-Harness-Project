@@ -21,6 +21,6 @@ COPY . .
 RUN useradd -m -u 1000 harnessuser && chown -R harnessuser:harnessuser /app
 USER harnessuser
 
-EXPOSE 8000
+EXPOSE 8000 10000
 
-CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn server.app:app --host 0.0.0.0 --port ${PORT:-8000}"]
