@@ -628,6 +628,8 @@ header {
 
 .phase-box-body {
   padding: 10px 12px;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 /* Resolved Diff Banner */

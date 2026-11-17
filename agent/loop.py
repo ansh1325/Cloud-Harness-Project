@@ -94,6 +94,17 @@ class AutonomousExecutionLoop:
             return "tests"
         return "."
 
+    @staticmethod
+    def _compact_output(raw: str, max_lines: int = 45) -> str:
+        """Keeps terminal output readable by trimming overly long repetitive pytest dumps."""
+        lines = [ln for ln in (raw or "").strip().splitlines() if ln.strip()]
+        if len(lines) <= max_lines:
+            return "\n".join(lines)
+        head = lines[:18]
+        tail = lines[-(max_lines - 19):]
+        omitted = len(lines) - len(head) - len(tail)
+        return "\n".join(head + [f"... ({omitted} verbose lines omitted for readability) ..."] + tail)
+
     async def run(self) -> AgentLoopResult:
         start_time = time.perf_counter()
         await self._emit("status", "INITIALIZING", {"status": "INITIALIZING"})
@@ -125,19 +136,31 @@ class AutonomousExecutionLoop:
         # =================================================================
         # PHASE 2: INITIAL BASELINE TEST VERIFICATION
         # =================================================================
-        await self._emit("thought", f"Executing baseline test suite [{target_test_suite}] inside sandbox to reproduce bug...")
+        await self._emit("thought", f"Executing baseline test suite [{target_test_suite}] inside sandbox...")
         baseline_test = await self.toolbox.run_pytest(target_test_suite)
-        baseline_log = (
-            f"[PHASE 1 • BASELINE REPRODUCTION] pytest {target_test_suite}\n"
-            + (baseline_test.stdout + baseline_test.stderr).strip()
+        baseline_raw = (baseline_test.stdout + baseline_test.stderr).strip()
+        baseline_missing_deps = (
+            baseline_test.exit_code != 0
+            and ("ModuleNotFoundError" in baseline_raw or "ImportError" in baseline_raw)
         )
+        no_tests_found = baseline_test.exit_code == 5
+        enhancement_mode = baseline_test.exit_code == 0 or no_tests_found
+
+        baseline_header = (
+            f"[PHASE 1 • BASELINE CHECK — TESTS ALREADY PASSING] pytest {target_test_suite}"
+            if baseline_test.exit_code == 0
+            else f"[PHASE 1 • BASELINE REPRODUCTION] pytest {target_test_suite}"
+        )
+        baseline_log = f"{baseline_header}\n{self._compact_output(baseline_raw)}"
         await self._emit("terminal", baseline_log, {
             "exit_code": baseline_test.exit_code,
             "duration_ms": baseline_test.duration_ms,
             "phase": "baseline"
         })
 
-        if baseline_test.exit_code == 0:
+        has_llm = bool(self.llm_client or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+
+        if baseline_test.exit_code == 0 and not has_llm:
             await self._emit("thought", "All tests are already passing. No repairs required.")
             patch_summary = PatchGenerator.generate_patch(
                 original_snapshots,
@@ -145,6 +168,8 @@ class AutonomousExecutionLoop:
                 task_title=self.task_description,
                 test_output=baseline_test.stdout
             )
+            await self._emit("patch", patch_summary.pr_title, patch_summary.model_dump())
+            await self._emit("status", "RESOLVED", {"status": "RESOLVED"})
             return AgentLoopResult(
                 task_id=self.task_id,
                 status="RESOLVED",
@@ -156,11 +181,27 @@ class AutonomousExecutionLoop:
                 patch_summary=patch_summary
             )
 
+        if baseline_test.exit_code == 0 and has_llm:
+            await self._emit(
+                "thought",
+                "Baseline tests already pass — entering AI Code Audit & Enhancement mode to fulfill your instruction."
+            )
+        elif no_tests_found:
+            await self._emit(
+                "thought",
+                "No pytest suite detected in repository — will synthesize requested edits and verify Python syntax/AST."
+            )
+        elif baseline_missing_deps:
+            await self._emit(
+                "thought",
+                "External repository requires third-party packages not preinstalled in sandbox — will synthesize edits and verify via Python syntax/AST compilation."
+            )
+
         # =================================================================
-        # PHASE 3: AUTONOMOUS REPAIR & SELF-CORRECTION LOOP
+        # PHASE 3: AUTONOMOUS REPAIR / ENHANCEMENT & VERIFICATION LOOP
         # =================================================================
         await self._emit("status", "ACTIVE_REPAIR", {"status": "ACTIVE_REPAIR"})
-        current_test_output = baseline_test.stdout + baseline_test.stderr
+        current_test_output = baseline_raw
         iteration = 0
         tests_passed = False
         last_test_output = current_test_output
@@ -174,7 +215,8 @@ class AutonomousExecutionLoop:
                 top_candidates,
                 current_test_output,
                 iteration,
-                target_test_suite
+                target_test_suite,
+                enhancement_mode=enhancement_mode
             )
 
             if not edits_applied:
@@ -183,16 +225,42 @@ class AutonomousExecutionLoop:
 
             # Compute and emit live diff to control plane
             current_files = {p: self.toolbox.read_file(p) for p in top_candidates if (self.sandbox.workspace_path / p).exists()}
+            modified_paths = [p for p, content in current_files.items() if original_snapshots.get(p) != content]
             current_diff = PatchGenerator.generate_patch(original_snapshots, current_files, self.task_description).unified_diff
             await self._emit("diff", current_diff, {"diff": current_diff})
+
+            # Syntax check modified Python files first
+            syntax_res = await self.toolbox.check_python_syntax(modified_paths)
+            if syntax_res.exit_code != 0:
+                last_test_output = syntax_res.stdout + syntax_res.stderr
+                current_test_output = last_test_output
+                await self._emit("terminal", f"[PHASE 2 • SYNTAX CHECK FAILED]\n{self._compact_output(last_test_output)}", {
+                    "exit_code": syntax_res.exit_code,
+                    "iteration": iteration,
+                    "phase": "verify"
+                })
+                await self._emit("thought", f"❌ Syntax error on iteration {iteration}. Self-correcting with compiler error...")
+                continue
+
+            # If repo had no tests or external missing deps, syntax + AST compile is the verification gate
+            if no_tests_found or baseline_missing_deps:
+                tests_passed = True
+                last_test_output = f"Syntax & AST verification PASSED for: {', '.join(modified_paths) or 'workspace'}"
+                await self._emit(
+                    "terminal",
+                    f"[PHASE 2 • POST-PATCH VERIFICATION — PASSED] py_compile\n✅ {last_test_output}",
+                    {"exit_code": 0, "iteration": iteration, "phase": "verify"}
+                )
+                await self._emit("thought", f"✅ Patch syntax & AST verified cleanly after iteration {iteration}!")
+                break
 
             # Run test suite in sandbox
             await self._emit("thought", f"Re-testing sandbox workspace [{target_test_suite}] after iteration {iteration} patch...")
             test_res = await self.toolbox.run_pytest(target_test_suite)
-            last_test_output = test_res.stdout + test_res.stderr
+            last_test_output = (test_res.stdout + test_res.stderr).strip()
 
             phase_label = "POST-PATCH VERIFICATION — PASSED" if test_res.exit_code == 0 else f"ITERATION {iteration} VERIFICATION"
-            verify_log = f"[PHASE 2 • {phase_label}] pytest {target_test_suite}\n" + last_test_output.strip()
+            verify_log = f"[PHASE 2 • {phase_label}] pytest {target_test_suite}\n{self._compact_output(last_test_output)}"
             await self._emit("terminal", verify_log, {
                 "exit_code": test_res.exit_code,
                 "iteration": iteration,
@@ -240,22 +308,26 @@ class AutonomousExecutionLoop:
         candidate_files: List[str],
         test_output: str,
         iteration: int,
-        target_test_suite: str = "tests"
+        target_test_suite: str = "tests",
+        enhancement_mode: bool = False
     ) -> bool:
         """
-        Synthesizes surgical edits. Uses Google Gemini LLM if GEMINI_API_KEY is
-        configured; falls back cleanly to AST-guided deterministic solver for
-        benchmark tasks so the harness runs reliably with or without API keys.
+        Synthesizes surgical edits. Uses Groq/Gemini LLM for general & custom GitHub repos;
+        preserves deterministic AST repair fallback for built-in benchmark suites.
         """
         groq_key = os.getenv("GROQ_API_KEY")
         gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        # Use LLM for initial diagnosis + multi-turn traceback self-correction (Iterations 1..max-1),
-        # preserving deterministic AST repair fallback on final retry or API failure.
-        use_llm = (self.llm_client or groq_key or gemini_key) and (iteration < self.max_iterations or self.max_iterations == 1)
+        use_llm = (self.llm_client or groq_key or gemini_key) and (
+            enhancement_mode or iteration < self.max_iterations or self.max_iterations == 1
+        )
         if use_llm:
             llm_applied = await self._call_llm_for_edits(
-                candidate_files, test_output, target_test_suite=target_test_suite,
-                gemini_key=gemini_key, groq_key=groq_key
+                candidate_files,
+                test_output,
+                target_test_suite=target_test_suite,
+                gemini_key=gemini_key,
+                groq_key=groq_key,
+                enhancement_mode=enhancement_mode
             )
             if llm_applied:
                 return True
@@ -331,7 +403,8 @@ class AutonomousExecutionLoop:
         test_output: str,
         target_test_suite: str = "tests",
         gemini_key: Optional[str] = None,
-        groq_key: Optional[str] = None
+        groq_key: Optional[str] = None,
+        enhancement_mode: bool = False
     ) -> bool:
         """Calls Groq (openai/gpt-oss-120b with 20b failover) or Google Gemini to synthesize surgical JSON edits."""
         if not groq_key and not gemini_key:
@@ -348,23 +421,35 @@ class AutonomousExecutionLoop:
         files_block = []
         for fp in source_files:
             try:
-                files_block.append(f"### FILE: {fp}\n```python\n{self.toolbox.read_file(fp)}\n```")
+                content = self.toolbox.read_file(fp)
+                # Cap individual file size to stay comfortably inside fast LLM context
+                if len(content) > 12000:
+                    content = content[:12000] + "\n# ... truncated ..."
+                files_block.append(f"### FILE: {fp}\n```python\n{content}\n```")
             except Exception:
                 continue
 
         if not files_block:
             return False
 
+        mode_instruction = (
+            "All existing tests currently pass. Carefully audit the source files against the user's TASK and apply "
+            "at least 1 meaningful, safe, non-breaking improvement (bug hardening, edge-case validation, error handling, "
+            "or the exact feature requested) without breaking any existing tests."
+            if enhancement_mode
+            else "Fix ALL bugs causing the failing tests in the source files above."
+        )
+
         prompt = (
             f"{SYSTEM_PROMPT}\n\n"
             f"TASK: {self.task_description}\n\n"
-            f"FAILING TEST OUTPUT:\n{test_output[-2500:]}\n\n"
+            f"TEST OUTPUT:\n{test_output[-2500:]}\n\n"
             f"SOURCE FILES:\n" + "\n\n".join(files_block) + "\n\n"
-            "Fix ALL bugs causing the failing tests in the source files above. "
+            f"{mode_instruction} "
             "Respond ONLY with a valid JSON array of exact substring edits:\n"
-            '[{"file_path": "app/...", "thought": "concise 1-sentence root cause diagnosis", '
+            '[{"file_path": "...", "thought": "concise 1-sentence engineering rationale", '
             '"target": "exact multi-character substring copied verbatim from the file", '
-            '"replacement": "fixed replacement code"}]\n'
+            '"replacement": "fixed or improved replacement code"}]\n'
             "No markdown fences or prose outside the JSON array."
         )
 

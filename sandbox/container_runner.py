@@ -73,9 +73,12 @@ class SandboxEnvironment:
 
         env = os.environ.copy()
         env["PYTHONPATH"] = str(self.workspace_path)
-        # Prevent interactive prompts
+        # Prevent interactive prompts & prevent nested sandbox test suites from consuming live LLM keys
         env["DEBIAN_FRONTEND"] = "noninteractive"
         env["CI"] = "true"
+        env.pop("GROQ_API_KEY", None)
+        env.pop("GEMINI_API_KEY", None)
+        env.pop("GOOGLE_API_KEY", None)
 
         try:
             process = await asyncio.create_subprocess_shell(

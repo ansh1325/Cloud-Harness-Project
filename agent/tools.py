@@ -32,6 +32,17 @@ class AgentToolbox:
         return await self.sandbox.execute_command(command)
 
     async def run_pytest(self, test_path: str = "tests") -> SandboxExecutionResult:
-        """Runs pytest on the test path with concise, readable line tracebacks."""
-        cmd = f"python -m pytest {test_path} -v --tb=line --no-header -p no:asyncio"
+        """Runs pytest supporting both sync and pytest-asyncio suites with concise tracebacks."""
+        cmd = (
+            f"python -m pytest {test_path} -v --tb=line --no-header "
+            f"-W ignore::pytest.PytestDeprecationWarning -o asyncio_mode=auto"
+        )
         return await self.sandbox.execute_command(cmd)
+
+    async def check_python_syntax(self, file_paths: list[str]) -> SandboxExecutionResult:
+        """Verifies modified Python files compile with zero syntax errors."""
+        py_files = [p for p in file_paths if p.endswith(".py")]
+        if not py_files:
+            return SandboxExecutionResult(command="py_compile", exit_code=0, stdout="OK", stderr="", duration_ms=0.0)
+        quoted = " ".join(f'"{p}"' for p in py_files)
+        return await self.sandbox.execute_command(f"python -m py_compile {quoted}")
