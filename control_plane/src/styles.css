@@ -491,13 +491,156 @@ header {
   font-family: "JetBrains Mono", Consolas, monospace;
 }
 
-/* Empty State */
+/* Empty State & Interactive Onboarding Guide */
 .empty-state {
   color: var(--text-muted);
   font-size: 12.5px;
   text-align: center;
-  margin-top: 36px;
+  margin-top: 32px;
   line-height: 1.7;
+}
+
+.onboarding-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.onboarding-hero {
+  background: linear-gradient(135deg, rgba(2, 132, 199, 0.14), rgba(16, 185, 129, 0.08));
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.onboarding-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 6px;
+}
+
+.onboarding-desc {
+  font-size: 12.5px;
+  color: #cbd5e1;
+  line-height: 1.55;
+}
+
+.flow-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.flow-step {
+  background: #162033;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.flow-step-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 3px;
+}
+
+.flow-step-text {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.quickstart-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.quickstart-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  background: #182234;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 11px 14px;
+  cursor: pointer;
+  color: var(--text-main);
+  transition: all 0.15s;
+}
+
+.quickstart-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #1e2c44;
+  transform: translateY(-1px);
+}
+
+.quickstart-btn-title {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.quickstart-btn-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+/* Before / After Terminal Sections */
+.phase-box {
+  border: 1px solid #1e293b;
+  border-radius: 7px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  background: #060b18;
+}
+
+.phase-box-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+
+.phase-box-before .phase-box-header {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border-bottom: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.phase-box-after .phase-box-header {
+  background: rgba(16, 185, 129, 0.14);
+  color: #34d399;
+  border-bottom: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.phase-box-hint {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.phase-box-body {
+  padding: 10px 12px;
+}
+
+/* Resolved Diff Banner */
+.verified-banner {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #6ee7b7;
+  border-radius: 7px;
+  padding: 10px 13px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  flex-shrink: 0;
 }
 
 /* Modal */

@@ -21,18 +21,20 @@ export default function App() {
   const [metrics, setMetrics] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
-  const [activeTab, setActiveTab] = useState('terminal');
+  const [activeTab, setActiveTab] = useState('diff');
   const [busyAction, setBusyAction] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
 
   // Live stream state for selected task
   const [traces, setTraces] = useState([]);
-  const [terminalLines, setTerminalLines] = useState([]);
+  const [baselineLines, setBaselineLines] = useState([]);
+  const [verifyLines, setVerifyLines] = useState([]);
   const [diffText, setDiffText] = useState('');
   const [diffStats, setDiffStats] = useState(null);
   const [prPayload, setPrPayload] = useState(null);
   const [pipelineStage, setPipelineStage] = useState(null);
   const [isFailed, setIsFailed] = useState(false);
+  const [isResolved, setIsResolved] = useState(false);
 
   const refreshMetrics = useCallback(async () => {
     try {
@@ -64,19 +66,21 @@ export default function App() {
 
       setSelectedTaskId(taskId);
       setTraces([]);
-      setTerminalLines([{ text: `[STREAM CONNECTED: ${taskId}]` }]);
+      setBaselineLines([]);
+      setVerifyLines([]);
       setDiffText('');
       setDiffStats(null);
       setPrPayload(null);
       setPipelineStage('ast');
       setIsFailed(false);
+      setIsResolved(false);
+      setActiveTab('terminal');
 
       const es = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/events`);
       eventSourceRef.current = es;
 
       es.onmessage = (e) => {
         const evt = JSON.parse(e.data);
-        const timeStr = new Date((evt.timestamp || Date.now() / 1000) * 1000).toLocaleTimeString();
 
         if (evt.event_type === 'thought' || evt.event_type === 'tool_call' || evt.event_type === 'status') {
           setTraces((prev) => [...prev, evt]);
@@ -91,6 +95,9 @@ export default function App() {
           } else if (msg === 'RESOLVED') {
             setPipelineStage('pr');
             setIsFailed(false);
+            setIsResolved(true);
+            // Automatically show the verified AI-generated code diff once all tests pass
+            setActiveTab('diff');
             loadTasks();
             refreshMetrics();
           } else if (msg === 'FAILED' || msg === 'ERROR') {
@@ -101,13 +108,14 @@ export default function App() {
         }
 
         if (evt.event_type === 'terminal') {
-          if (evt.data?.phase === 'baseline') setPipelineStage('baseline');
-          if (evt.data?.phase === 'verify') setPipelineStage('patch');
-          const lines = (evt.message || '').split('\n').map((line) => ({
-            text: line,
-            prefix: line.trim().startsWith('[PHASE ') ? timeStr : ''
-          }));
-          setTerminalLines((prev) => [...prev, ...lines]);
+          const lines = (evt.message || '').split('\n').map((line) => ({ text: line }));
+          if (evt.data?.phase === 'baseline' || (evt.message || '').includes('PHASE 1')) {
+            setPipelineStage('baseline');
+            setBaselineLines((prev) => [...prev, ...lines]);
+          } else {
+            setPipelineStage('patch');
+            setVerifyLines((prev) => [...prev, ...lines]);
+          }
         }
 
         if (evt.event_type === 'diff' && evt.message) {
@@ -129,7 +137,6 @@ export default function App() {
         }
       };
 
-      // Clean close when server sends explicit terminal sentinel (prevents browser EventSource errors)
       es.addEventListener('done', () => {
         es.close();
         if (eventSourceRef.current === es) {
@@ -171,7 +178,6 @@ export default function App() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const created = await res.json();
       await loadTasks();
-      setActiveTab('terminal');
       connectStream(created.task_id);
     } catch (err) {
       alert(`Failed to launch benchmark: ${err.message}`);
@@ -191,7 +197,6 @@ export default function App() {
       const createdList = await res.json();
       await loadTasks();
       if (Array.isArray(createdList) && createdList.length > 0) {
-        setActiveTab('terminal');
         connectStream(createdList[0].task_id);
       }
       refreshMetrics();
@@ -220,7 +225,6 @@ export default function App() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const created = await res.json();
     await loadTasks();
-    setActiveTab('terminal');
     connectStream(created.task_id);
   };
 
@@ -234,12 +238,15 @@ export default function App() {
     }
     setSelectedTaskId(null);
     setTraces([]);
-    setTerminalLines([]);
+    setBaselineLines([]);
+    setVerifyLines([]);
     setDiffText('');
     setDiffStats(null);
     setPrPayload(null);
     setPipelineStage(null);
     setIsFailed(false);
+    setIsResolved(false);
+    setActiveTab('diff');
     await loadTasks();
   };
 
@@ -266,14 +273,20 @@ export default function App() {
           pipelineStage={pipelineStage}
           isFailed={isFailed}
           traces={traces}
+          busyAction={busyAction}
           onJumpTab={setActiveTab}
+          onRunBenchmark={handleRunBenchmark}
+          onRunSwarm={handleRunSwarm}
+          onOpenDispatch={() => setModalOpen(true)}
         />
 
         <SandboxInspector
           activeTab={activeTab}
           onTabChange={setActiveTab}
           selectedTaskId={selectedTaskId}
-          terminalLines={terminalLines}
+          isResolved={isResolved}
+          baselineLines={baselineLines}
+          verifyLines={verifyLines}
           diffText={diffText}
           diffStats={diffStats}
           prPayload={prPayload}

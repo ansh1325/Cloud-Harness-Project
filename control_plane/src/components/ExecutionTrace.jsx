@@ -12,7 +12,11 @@ export default function ExecutionTrace({
   pipelineStage,
   isFailed,
   traces,
-  onJumpTab
+  busyAction,
+  onJumpTab,
+  onRunBenchmark,
+  onRunSwarm,
+  onOpenDispatch
 }) {
   const scrollRef = useRef(null);
 
@@ -29,7 +33,7 @@ export default function ExecutionTrace({
       <div className="panel-header">
         <span>Live Agent Reasoning &amp; Tool Execution</span>
         <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-          {selectedTaskId || 'No task selected'}
+          {selectedTaskId || 'Quick Start Guide'}
         </span>
       </div>
 
@@ -51,12 +55,84 @@ export default function ExecutionTrace({
 
       <div className="panel-body" ref={scrollRef}>
         {traces.length === 0 ? (
-          <div className="empty-state">
-            Click <strong style={{ color: 'var(--success)' }}>▶ Benchmark</strong> for a single autonomous repair,
-            <br />
-            <strong style={{ color: '#818cf8' }}>⚡ 3x Swarm</strong> to run 3 isolated sandboxes in parallel,
-            <br />
-            or <strong style={{ color: 'var(--accent)' }}>+ Dispatch</strong> for a custom repo / task.
+          <div className="onboarding-card">
+            <div className="onboarding-hero">
+              <div className="onboarding-title">🤖 What Is This App?</div>
+              <div className="onboarding-desc">
+                An <strong>Autonomous AI Bug-Fixing Harness</strong> (similar to Devin / SWE-bench). Hand it a
+                buggy Python repository and a task — it spins up an isolated cloud sandbox, reproduces the
+                failing tests, uses <strong>Groq 120B</strong> to write surgical code fixes, verifies every test
+                passes, and delivers a ready-to-apply <strong>Git <code>.patch</code></strong>.
+              </div>
+            </div>
+
+            <div className="flow-grid">
+              <div className="flow-step">
+                <div className="flow-step-title">1. AST Repo Scan</div>
+                <div className="flow-step-text">
+                  Acquires a pre-warmed sandbox (&lt;5s) and parses Python functions &amp; docstrings to locate buggy files.
+                </div>
+              </div>
+              <div className="flow-step">
+                <div className="flow-step-title">2. Reproduce Bug (Before)</div>
+                <div className="flow-step-text">
+                  Runs <code>pytest</code> first so failing tests prove the bug exists and feed exact tracebacks to the AI.
+                </div>
+              </div>
+              <div className="flow-step">
+                <div className="flow-step-title">3. AI Patch &amp; Verify (After)</div>
+                <div className="flow-step-text">
+                  Groq 120B edits the source code and re-runs <code>pytest</code> until all tests turn green.
+                </div>
+              </div>
+              <div className="flow-step">
+                <div className="flow-step-title">4. Diff &amp; Patch Delivery</div>
+                <div className="flow-step-text">
+                  Generates a color-coded unified diff, PR summary, and downloadable <code>.patch</code> file.
+                </div>
+              </div>
+            </div>
+
+            <div className="quickstart-list">
+              <button
+                className="quickstart-btn"
+                disabled={busyAction !== null}
+                onClick={onRunBenchmark}
+              >
+                <span className="quickstart-btn-title" style={{ color: '#34d399' }}>
+                  ▶ 1. Try 1-Click Demo Fix (calculator.py)
+                </span>
+                <span className="quickstart-btn-sub">
+                  Watch the AI diagnose &amp; fix 3 broken freight/temperature bugs and generate a verified Git diff (~10s).
+                </span>
+              </button>
+
+              <button
+                className="quickstart-btn"
+                disabled={busyAction !== null}
+                onClick={onRunSwarm}
+              >
+                <span className="quickstart-btn-title" style={{ color: '#a5b4fc' }}>
+                  ⚡ 2. Launch 3x Parallel Agent Swarm
+                </span>
+                <span className="quickstart-btn-sub">
+                  Spawn 3 isolated sandboxes simultaneously (calculator, telemetry pipeline &amp; full multi-file repair).
+                </span>
+              </button>
+
+              <button
+                className="quickstart-btn"
+                disabled={busyAction !== null}
+                onClick={onOpenDispatch}
+              >
+                <span className="quickstart-btn-title" style={{ color: '#38bdf8' }}>
+                  🔗 3. Fix Your Own Public GitHub Python Repo
+                </span>
+                <span className="quickstart-btn-sub">
+                  Paste any public GitHub URL + bug description — the sandbox clones, tests, patches, and exports a <code>.patch</code>.
+                </span>
+              </button>
+            </div>
           </div>
         ) : (
           traces.map((evt, idx) => {
@@ -80,6 +156,9 @@ export default function ExecutionTrace({
                   <div className="inline-actions">
                     <button className="inline-diff-btn" onClick={() => onJumpTab('diff')}>
                       View Generated Diff →
+                    </button>
+                    <button className="inline-diff-btn" onClick={() => onJumpTab('terminal')}>
+                      Inspect Before/After Tests →
                     </button>
                     <button className="inline-diff-btn" onClick={() => onJumpTab('pr')}>
                       View PR Payload →
